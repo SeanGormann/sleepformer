@@ -8,6 +8,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 nfolds = 6
 TRAIN_FOLD = 0
 SEED = 27
+torch_fix_seed(seed=SEED)
 
 CFG = {
     #'block_size': 17280,
@@ -38,7 +39,7 @@ CFG = {
 for fold in [0]: # running multiple folds at kaggle may cause OOM
 
     skf = StratifiedKFold(n_splits=nfolds, random_state=SEED, shuffle=True)
-    metadata = pd.read_csv('/content/drive/MyDrive/train_events.csv')
+    metadata = pd.read_csv('train_events.csv')
     unique_ids = metadata['series_id'].unique()
     meta_cts = pd.DataFrame(unique_ids, columns=['series_id'])
     for i, (train_index, valid_index) in enumerate(skf.split(X=meta_cts['series_id'], y=[1]*len(meta_cts))):
@@ -52,11 +53,11 @@ for fold in [0]: # running multiple folds at kaggle may cause OOM
         if i == TRAIN_FOLD:
             break
 
-    train_fpaths = [f"/content/train_csvs/{_id}.csv" for _id in train_ids]
-    valid_fpaths = [f"/content/train_csvs/{_id}.csv" for _id in valid_ids]
+    train_fpaths = [f"/sleepformer/dataset/train_csvs/{_id}.csv" for _id in train_ids]
+    valid_fpaths = [f"/sleepformer/dataset/train_csvs/{_id}.csv" for _id in valid_ids]
 
 
-
+    print("Preparing Data...")
     ds_train = SleepDataset(train_fpaths, CFG, is_train=True, zbp=0.20) #zbp = zero block percentage
     dl_train = torch.utils.data.DataLoader(ds_train, num_workers=num_workers, batch_size=CFG['batch_size'],
                 persistent_workers=True, shuffle=True)
@@ -71,6 +72,7 @@ for fold in [0]: # running multiple folds at kaggle may cause OOM
     gc.collect()
     data = DataLoaders(dl_train,dl_val)
 
+    print("Preparing the model...")
 
     model = SleepFormer(CFG).to(device)
     print(f'Number of parameters: {sum(p.numel() for p in model.parameters())}')

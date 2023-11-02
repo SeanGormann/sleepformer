@@ -10,10 +10,10 @@ import random
 
 class SleepDataset(Dataset):
     def __init__(self, folder, CFG, is_train=False, zbp=0.1, sample_per_epoch=10000):
-        self.anglez_mean = np.load('/content/drive/MyDrive/anglez_mean.npy')
-        self.anglez_std = np.load('/content/drive/MyDrive/anglez_std.npy')
-        self.enmo_mean = np.load('/content/drive/MyDrive/enmo_mean.npy')
-        self.enmo_std = np.load('/content/drive/MyDrive/enmo_std.npy')
+        self.anglez_mean = np.load('anglez_mean.npy')
+        self.anglez_std = np.load('anglez_std.npy')
+        self.enmo_mean = np.load('enmo_mean.npy')
+        self.enmo_std = np.load('enmo_std.npy')
 
         self.CFG = CFG
         self.is_train = is_train
