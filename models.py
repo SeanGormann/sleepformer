@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+from fastai.optimizer import Adam
+
 
 CFG = {
     #'block_size': 17280,
@@ -80,7 +82,7 @@ class SleepformerEncoder(nn.Module):
         self.pos_enc = PositionalEncoding(self.CFG['sleepformer_dim'], self.CFG['block_size'] // self.CFG['patch_size'])
         self.first_dropout = nn.Dropout(self.CFG['sleepformer_first_dropout'])
         self.enc_layers = nn.ModuleList([EncoderLayer(self.CFG) for _ in range(self.CFG['sleepformer_num_encoder_layers'])])
-        self.first_linear = nn.Linear(self.CFG['patch_size']*3, self.CFG['sleepformer_dim'])
+        self.first_linear = nn.Linear(self.CFG['patch_size']*2, self.CFG['sleepformer_dim'])
 
         self.lstm_layers = nn.ModuleList()
         for i in range(self.CFG['sleepformer_num_lstm_layers']):
@@ -135,3 +137,109 @@ class SleepFormer(nn.Module):
         #output = self.sigmoid(output)
 
         return output
+
+
+
+
+
+
+
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+
+
+
+class RSleepformerEncoder(nn.Module):
+    def __init__(self, CFG):
+        super(RSleepformerEncoder, self).__init__()
+        self.CFG = CFG
+        self.pos_enc = PositionalEncoding(self.CFG['sleepformer_dim'], self.CFG['block_size'] // self.CFG['patch_size'])        
+        self.first_dropout = nn.Dropout(self.CFG['sleepformer_first_dropout'])
+        self.enc_layers = nn.ModuleList([EncoderLayer(CFG) for _ in range(self.CFG['sleepformer_num_encoder_layers'])])
+        self.first_linear = nn.Linear(self.CFG['patch_size']*2, self.CFG['sleepformer_dim'])
+
+        # Recycling components
+        self.recycle_iterations = self.CFG.get('recycle_iterations', 3)
+        self.recycle_emb = nn.Linear(1, self.CFG['sleepformer_dim'])  # Embedding for recycled output
+        self.recycle_norm = nn.LayerNorm(self.CFG['sleepformer_dim'])  # Layer normalization for recycling embedding
+
+        self.last_dim = self.CFG['sleepformer_dim'] * (2 if self.CFG['sleepformer_num_lstm_layers'] > 0 else 1)
+        self.last_linear = nn.Linear(self.last_dim, 1)
+        
+        self.lstm_layers = nn.ModuleList()
+        lstm_input_dim = self.CFG['sleepformer_dim']
+        for i in range(self.CFG['sleepformer_num_lstm_layers']):
+            self.lstm_layers.append(nn.LSTM(
+                lstm_input_dim, 
+                self.CFG['sleepformer_dim'],
+                bidirectional=True, 
+                batch_first=True, 
+                dropout=self.CFG['sleepformer_lstm_dropout'] if i < self.CFG['sleepformer_num_lstm_layers'] - 1 else 0
+            ))
+            lstm_input_dim = self.CFG['sleepformer_dim'] * 2  # Double the input dimension for the next LSTM layer if bidirectional
+
+
+    def forward(self, x, training=True):
+
+        # Try normalise x maybe? Data should already be normalized at this point though
+        x = self.first_linear(x)
+
+        x = self.pos_enc(x, training=training)
+        
+        if self.training:
+            # Random number of recycling iterations during training
+            N = torch.randint(1, self.recycle_iterations + 1, (1,)).item()
+        else:
+            # Fixed number of recycling iterations during evaluation
+            N = self.CFG['recycle_iterations']
+
+        x = self.first_dropout(x)
+
+
+        # Initialize recycled output with zeros
+        #recycled_output = torch.zeros(x.size(), device=x.device)
+        recycled_output = torch.zeros((x.size(0), x.size(1), 1), device=device)
+        
+        for _ in range(N):
+            # Add recycled output to input
+            recycled_output = self.recycle_emb(recycled_output)
+            recycled_output = self.recycle_norm(recycled_output)
+            x_emb = x + recycled_output
+
+            x_emb = x_emb.transpose(0, 1)
+            for enc_layer in self.enc_layers:
+                x_emb = enc_layer(x_emb)
+            x_emb = x_emb.transpose(0, 1)
+
+            # Check here if the LSTM layers list is not None and not empty
+            if self.lstm_layers:
+                # Loop through the LSTM layers with an index
+                for i, lstm in enumerate(self.lstm_layers):
+                    recycled_output, _ = lstm(x_emb)
+                    x_emb = recycled_output
+            
+            recycled_output = self.last_linear(recycled_output)
+
+        return recycled_output
+
+
+class RSleepFormer(nn.Module):
+    def __init__(self, CFG):
+        super(RSleepFormer, self).__init__()
+        self.CFG = CFG
+        self.encoder = RSleepformerEncoder(CFG)
+        #last_dim = CFG['sleepformer_dim'] * (2 if CFG['sleepformer_num_lstm_layers'] > 0 else 1)
+        #self.last_linear = nn.Linear(last_dim, 1)
+        self.dropout = nn.Dropout(self.CFG['sleepformer_first_dropout'])
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        x = x["X"]
+        encoded_seq = self.encoder(x)
+        encoded_seq = self.dropout(encoded_seq)
+
+        #output = self.last_linear(encoded_seq)
+
+        return encoded_seq
