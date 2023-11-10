@@ -152,6 +152,25 @@ class DeviceDataLoader:
 
 
 
+"""
+def expand_patches(predictions, patch_size):
+    # predictions shape: (batch_size, seq_len, num_features)
+
+    # Expand the last dimension
+    predictions = predictions.unsqueeze(-1)  # New shape: (batch_size, seq_len, num_features, 1)
+
+    # Transpose to bring the feature dimension to the end
+    predictions = predictions.permute(0, 1, 3, 2)  # New shape: (batch_size, seq_len, 1, num_features)
+
+    # Tile the predictions to match the patch size
+    predictions = predictions.repeat(1, 1, patch_size, 1)  # New shape: (batch_size, seq_len, patch_size, num_features)
+
+    # Reshape to get the final expanded shape
+    predictions = predictions.view(predictions.shape[0], predictions.shape[1] * predictions.shape[2], predictions.shape[3])
+    # New shape: (batch_size, seq_len * patch_size, num_features)
+
+    return predictions
+"""
 
 def expand_patches(predictions, patch_size):
     # predictions shape: (batch_size, seq_len, num_features)
@@ -173,7 +192,7 @@ def expand_patches(predictions, patch_size):
 
 
 
-
+"""
 class CustomLoss(nn.Module):
     def __init__(self, CFG, z_loss_weight=0.01):
         super(CustomLoss, self).__init__()
@@ -200,8 +219,79 @@ class CustomLoss(nn.Module):
         total_loss = bce_loss + self.z_loss_weight * z_loss
 
         return total_loss
+"""
 
 
+class CustomLoss(nn.Module):
+    def __init__(self, CFG, z_loss_weight=0.01):
+        super(CustomLoss, self).__init__()
+        self.ce = nn.BCEWithLogitsLoss(reduction='none')
+        self.z_loss_weight = z_loss_weight
+        self.CFG = CFG
+
+    def forward(self, inputs, targets, z=None):
+        targets = targets['Y']
+        
+        # Expand patches for inputs and targets
+        expanded_inputs = expand_patches(inputs, self.CFG['patch_size'])
+        expanded_targets = expand_patches(targets, self.CFG['patch_size'])
+
+        #expanded_inputs = inputs
+        #expanded_targets = targets
+
+        # Flatten the inputs and targets to apply BCE loss
+        inputs_flat = expanded_inputs.view(-1)  # Flatten the inputs
+        targets_flat = expanded_targets.view(-1)  # Flatten the targets
+        
+        # Calculate the Binary Cross-Entropy loss for each element
+        bce_loss = self.ce(inputs_flat, targets_flat)
+        
+        # Sum the losses and divide by the total number of elements to get the mean loss
+        total_loss = torch.sum(bce_loss) / inputs.numel()
+
+        """Z = expanded_inputs.exp().sum(dim=-1).log()
+        z_loss = (Z**2).mean() * self.z_loss_weight
+        total_loss = total_loss + z_loss"""
+
+        return total_loss
+
+
+
+
+from fastai.metrics import Metric
+from sklearn.metrics import average_precision_score
+import numpy as np
+
+class MAPMetric(Metric):
+    "Mean Average Precision (MAP) for aligned prediction and target sequences"
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.preds = []
+        self.targs = []
+
+    def accumulate(self, learn):
+        preds = learn.pred
+        targs = learn.yb[0]['Y']  # Assuming the targets are in the first element of the tuple
+        # You might need to adjust this part if preds and targs need any specific preparation
+        self.preds.append(preds)
+        self.targs.append(targs)
+
+    @property
+    def value(self):
+        all_preds = torch.cat(self.preds).cpu().numpy()
+        all_targs = torch.cat(self.targs).cpu().numpy()
+
+        # Ensure binary format by thresholding at 0.5
+        all_targs_binary = (all_targs > 0.8).astype(int)
+
+        ap_scores = []
+        for i in range(all_preds.shape[1]):  # Iterate over each class
+            ap = average_precision_score(all_targs_binary[:, i], all_preds[:, i])
+            ap_scores.append(ap)
+
+        return np.mean(ap_scores)
 
 
 def push_to_github(file_path, commit_message):
